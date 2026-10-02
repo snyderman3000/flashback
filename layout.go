@@ -68,14 +68,15 @@ const (
 )
 
 type item struct {
-	kind int
-	x, w int
-	h    int
-	text string
-	st   textStyle
-	img  *image.RGBA
-	io   string
-	ans  bool // the <hr id=answer> divider
+	kind    int
+	x, w    int
+	h       int
+	text    string
+	st      textStyle
+	img     *image.RGBA
+	io      string
+	ans     bool // the <hr id=answer> divider
+	missing bool
 }
 
 type line struct {
@@ -97,12 +98,13 @@ type MediaSource interface {
 }
 
 type word struct {
-	text  string
-	st    textStyle
-	space bool // breakable space before this word
-	kind  int
-	img   *image.RGBA
-	io    string
+	text    string
+	st      textStyle
+	space   bool // breakable space before this word
+	kind    int
+	img     *image.RGBA
+	io      string
+	missing bool // placeholder for an image that couldn't be shown
 }
 
 type layoutCtx struct {
@@ -118,8 +120,9 @@ type layoutCtx struct {
 	y        int
 	pre      int
 	imgCache map[string]*image.RGBA
-	grid     int // when > 0, every line is a whole number of grid rows (ruled paper)
-	gridBase int // baseline position inside a grid row
+	inMath   bool // inside \( … \) spanning text runs
+	grid     int  // when > 0, every line is a whole number of grid rows (ruled paper)
+	gridBase int  // baseline position inside a grid row
 }
 
 var soundRe = regexp.MustCompile(`\[sound:([^\]]+)\]`)
@@ -637,6 +640,7 @@ func isCJK(r rune) bool {
 }
 
 func (lc *layoutCtx) text(s string, st textStyle) {
+	s = mathify(s, &lc.inMath)
 	// [sound:...] tags become speaker chips
 	for {
 		loc := soundRe.FindStringSubmatchIndex(s)
@@ -780,7 +784,37 @@ func (lc *layoutCtx) flush(force bool) {
 		cur = nil
 		curW = 0
 	}
-	for _, w := range words {
+	// a line may only break where there's a space, around CJK characters, or at images
+	isCJKWord := func(w word) bool {
+		r, _ := utf8.DecodeRuneInString(w.text)
+		return w.kind == itText && isCJK(r)
+	}
+	breakable := func(i int) bool {
+		return i == 0 || words[i].space || words[i].kind == itImage || words[i-1].kind == itImage ||
+			isCJKWord(words[i]) || isCJKWord(words[i-1])
+	}
+	wordW := func(w word) int {
+		if w.kind == itImage {
+			return w.img.Bounds().Dx()
+		}
+		return w.st.font().Width(w.text)
+	}
+	for i, w := range words {
+		glued := !breakable(i)
+		if !glued && len(cur) > 0 && w.kind != itImage {
+			// does the whole unbreakable run starting here fit on this line?
+			run := wordW(w)
+			for j := i + 1; j < len(words) && !breakable(j); j++ {
+				run += wordW(words[j])
+			}
+			sp := 0
+			if w.space {
+				sp = w.st.font().Width(" ")
+			}
+			if curW+sp+run > avail && run <= avail {
+				emitLine()
+			}
+		}
 		if w.kind == itImage {
 			if len(cur) > 0 && curW+w.img.Bounds().Dx() > avail {
 				emitLine()
@@ -799,7 +833,7 @@ func (lc *layoutCtx) flush(force bool) {
 		if w.space && len(cur) > 0 {
 			sp = fs.Width(" ")
 		}
-		if len(cur) > 0 && curW+sp+ww > avail {
+		if len(cur) > 0 && curW+sp+ww > avail && !glued {
 			emitLine()
 			sp = 0
 		}
@@ -823,7 +857,7 @@ func (lc *layoutCtx) flush(force bool) {
 		if text == "" {
 			continue
 		}
-		cur = append(cur, item{kind: w.kind, x: curW + sp, w: ww, text: text, st: w.st})
+		cur = append(cur, item{kind: w.kind, x: curW + sp, w: ww, text: text, st: w.st, missing: w.missing})
 		curW += sp + ww
 	}
 	if len(cur) > 0 {
@@ -849,7 +883,11 @@ func (lc *layoutCtx) image(src, io string, attrs map[string]string) {
 	}
 	img := lc.loadImage(name, attrs)
 	if img == nil {
-		lc.words = append(lc.words, word{text: "[" + shortName(name) + "]", st: textStyle{size: max(12, lc.base*3/4), col: inkSoft, italic: true}, space: true})
+		label := shortName(name)
+		if strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "https://") {
+			label = "online image"
+		}
+		lc.words = append(lc.words, word{missing: label != "online image", text: "[" + label + "]", st: textStyle{size: max(12, lc.base*3/4), col: inkSoft, italic: true}, space: true})
 		return
 	}
 	lc.words = append(lc.words, word{kind: itImage, img: img, io: io, space: lc.pendingS && len(lc.words) > 0})
@@ -1180,6 +1218,8 @@ func plainText(s, blockSep, imgMark string) string {
 		s = s[gt+1:]
 	}
 	out := html.UnescapeString(b.String())
+	inMath := false
+	out = mathify(out, &inMath)
 	out = soundRe.ReplaceAllString(out, " ♪ ")
 	return strings.Join(strings.Fields(strings.ReplaceAll(out, " ", " ")), " ")
 }

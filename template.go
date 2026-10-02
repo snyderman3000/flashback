@@ -8,13 +8,26 @@ package main
 import (
 	"fmt"
 	"html"
+	"log"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 )
 
-// CardHTML renders the question or answer side of a card to HTML.
-func (p *Package) CardHTML(ci int, answer bool) string {
+// CardHTML renders the question or answer side of a card to HTML. A card
+// that can't be rendered shows an explanation instead of taking the app down.
+func (p *Package) CardHTML(ci int, answer bool) (out string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("rendering card %d (answer=%v): %v\n%s", ci, answer, r, debug.Stack())
+			out = "<i>Flashback couldn't show this card.</i><br><small>" + html.EscapeString(fmt.Sprint(r)) + "</small>"
+		}
+	}()
+	return p.cardHTML(ci, answer)
+}
+
+func (p *Package) cardHTML(ci int, answer bool) string {
 	c := p.Cards[ci]
 	n := p.Notes[c.Note]
 	nt := p.Notetypes[n.Mid]
@@ -25,14 +38,64 @@ func (p *Package) CardHTML(ci int, answer bool) string {
 	ctx := &tmplCtx{p: p, nt: nt, card: c, flds: flds, ord: c.Ord, tags: n.Tags}
 	t := nt.templateFor(c.Ord)
 	q := ctx.render(t.Q, false, "")
-	out := q
-	if answer {
+	var out string
+	if !nt.isImageOcclusion() && !visibleHTML(q) {
+		// The template builds the card with JavaScript (e.g. "Cloze Overlapping")
+		// and leaves only hidden fields behind. Show the note's content directly.
+		out = ctx.fallback(t, answer)
+	} else if answer {
 		out = ctx.render(t.A, true, q)
+	} else {
+		out = q
 	}
 	if nt.isImageOcclusion() {
 		out = ctx.imageOcclusion(out, answer)
 	}
 	return out
+}
+
+var clozeTagRe = regexp.MustCompile(`\{\{[^{}]*\bcloze:([^{}:]+)\}\}`)
+
+// fallback renders a card whose template shows nothing without JavaScript:
+// the cloze field (or the first non-empty field) as the question, and on the
+// answer side the revealed text plus whatever the answer template does show.
+func (x *tmplCtx) fallback(t Template, answer bool) string {
+	var q, a string
+	if m := clozeTagRe.FindStringSubmatch(t.Q + t.A); m != nil {
+		v, _ := x.field(strings.TrimSpace(m[1]))
+		q = renderCloze(v, x.ord+1, false)
+		a = renderCloze(v, x.ord+1, true)
+	} else {
+		for i, f := range x.flds {
+			if nonEmpty(f) && i < len(x.nt.Fields) {
+				q, a = f, f
+				break
+			}
+		}
+	}
+	if !answer {
+		return q
+	}
+	extra := x.render(t.A, true, "")
+	if !visibleHTML(extra) {
+		// nothing visible on the back either: list the other filled-in fields
+		var parts []string
+		for i, f := range x.flds {
+			if nonEmpty(f) && f != q && i < len(x.nt.Fields) && !strings.Contains(a, f) {
+				parts = append(parts, f)
+			}
+		}
+		extra = strings.Join(parts, "<br>")
+	}
+	return a + "<hr id=answer>" + extra
+}
+
+// visibleHTML reports whether HTML would show anything on the card.
+func visibleHTML(h string) bool {
+	if strings.TrimSpace(h) == "" {
+		return false
+	}
+	return len(LayoutHTML(h, 4000, 20, 100, 0, 0, nil).Lines) > 0
 }
 
 func (nt *Notetype) templateFor(ord int) Template {
@@ -228,7 +291,10 @@ func (x *tmplCtx) replace(tag string, answer bool, front string) string {
 	// filters apply innermost (nearest the field name) first
 	for i := len(filters) - 1; i >= 0; i-- {
 		f := strings.TrimSpace(filters[i])
-		fname := strings.Fields(f + " ")[0]
+		if f == "" {
+			continue // "{{clickable::Tags}}" and similar double-colon spellings
+		}
+		fname := strings.Fields(f)[0]
 		switch fname {
 		case "cloze":
 			val = renderCloze(val, x.ord+1, answer)

@@ -43,8 +43,10 @@ WHAT CARDS CAN SHOW
   pictures (PNG, JPEG, GIF, WebP, BMP and SVG) and image occlusion.
   Japanese, Chinese and Korean use the font OnionOS already has. To add
   another script, drop a .ttf/.otf font into App/Flashback/fonts.
-  Not supported: sound and video (cards show a ♪ instead), MathJax and
-  LaTeX (shown as text), and card styling from CSS.
+  Maths (MathJax) is shown as readable text: F = (q₁ q₂)/(4πε₀ r²).
+  Note types that build cards with JavaScript show their cloze text or
+  fields instead. Not supported: sound and video (cards show a ♪),
+  [latex] images, and card styling from CSS.
 
 SETTINGS (App/Flashback/data/config.json, created on first run)
   deck_folders     folders to look in        default ["/mnt/SDCARD/Anki"]

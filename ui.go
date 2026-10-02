@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -94,10 +95,11 @@ type UI struct {
 	toast      string
 	toastUntil time.Time
 
-	frame    int
-	byeStart int
-	quit     bool
-	post     chan func()
+	frame        int
+	wasAnimating bool
+	byeStart     int
+	quit         bool
+	post         chan func()
 }
 
 func NewUI(env *Env, w, h int) *UI {
@@ -173,7 +175,7 @@ func (u *UI) scan() {
 		u.env.PruneCache(paths)
 		for _, e := range todo {
 			e := e
-			pk, err := OpenPackage(e.Path, cacheRoot, func(s string) {
+			pk, err := safeOpenPackage(e.Path, cacheRoot, func(s string) {
 				u.post <- func() { e.Status = s }
 			})
 			var prog *Progress
@@ -241,6 +243,27 @@ func (u *UI) Tick() {
 
 func (u *UI) Animating() bool {
 	return u.scanning || u.flipping() || u.toast != "" || u.scr == scrBye
+}
+
+// TickNeedsDraw reports whether the screen must be redrawn after a tick: while
+// anything animates, and once more when it stops, so the final state (the
+// answer side after a flip, the screen without a toast) actually appears.
+func (u *UI) TickNeedsDraw() bool {
+	anim := u.Animating()
+	need := anim || u.wasAnimating
+	u.wasAnimating = anim
+	return need
+}
+
+// safeOpenPackage turns a crash while unpacking a strange deck into an error.
+func safeOpenPackage(path, cacheRoot string, progress func(string)) (p *Package, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("unpacking %s: %v\n%s", path, r, debug.Stack())
+			p, err = nil, fmt.Errorf("unexpected problem in this file (%v)", r)
+		}
+	}()
+	return OpenPackage(path, cacheRoot, progress)
 }
 
 const flipFrames = 6

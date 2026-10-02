@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"strings"
 	"testing"
 	"time"
 )
@@ -12,9 +11,10 @@ import (
 // testdecks/ug.py from the deck's published CrowdAnki export; they're too big
 // to commit, so the test skips when they're absent.
 func TestRealDeckSweep(t *testing.T) {
-	for _, name := range []string{"ug_new.apkg", "ug_legacy.apkg"} {
+	for _, name := range []string{"ug_new.apkg", "ug_legacy.apkg", "mit802.apkg"} {
 		if _, err := os.Stat("testdata/" + name); err != nil {
-			t.Skip("real deck not present")
+			t.Logf("%s not present", name)
+			continue
 		}
 		t0 := time.Now()
 		p := openTest(t, name)
@@ -35,7 +35,7 @@ func TestRealDeckSweep(t *testing.T) {
 						switch {
 						case it.kind == itImage:
 							imgs++
-						case it.kind == itText && strings.HasPrefix(it.text, "[ug-"):
+						case it.missing:
 							missing++
 						}
 					}

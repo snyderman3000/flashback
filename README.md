@@ -64,7 +64,9 @@ MENU exits from anywhere. Progress is saved as you go.
 
 - Flashback keeps its own progress in `App/Flashback/data/progress`, per deck **file name**. Replace a deck with an updated export of the same name and your progress carries over. It doesn't sync with Anki or AnkiWeb, and scheduling exported with a deck isn't imported.
 - `data/cache` holds unpacked decks. It's safe to delete; it's rebuilt automatically.
-- Not supported yet: sound and video (cards show ♪ instead), MathJax and LaTeX (shown as text), and the deck's own CSS beyond colours, sizes and bold/italic.
+- Maths written for MathJax (`\( … \)`) is shown as readable text with symbols, superscripts and subscripts (`F = (q₁ q₂)/(4πε₀ r²)`), not typeset equations.
+- Some note types build the card with JavaScript (for example "Cloze Overlapping"). Flashback can't run that, so it shows the note's cloze text (or its fields) instead.
+- Not supported yet: sound and video (cards show ♪ instead), [latex] images, and the deck's own CSS beyond colours, sizes and bold/italic.
 
 ## Building
 

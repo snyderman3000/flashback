@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const version = "0.1.0"
+const version = "0.1.1"
 
 // Config lives in App/Flashback/data/config.json.
 type Config struct {
@@ -218,7 +218,7 @@ func main() {
 		case <-tick.C:
 			ui.frame++
 			ui.Tick()
-			if ui.Animating() {
+			if ui.TickNeedsDraw() {
 				dirty = true
 			}
 			if m := time.Now().Minute(); m != lastMinute {

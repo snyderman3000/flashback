@@ -165,3 +165,47 @@ func TestUISmallScreenAndTextSizes(t *testing.T) {
 		}
 	}
 }
+
+// TestScreenShowsAnswerAfterFlip runs the device's draw loop: draw on keys, and
+// on ticks only when TickNeedsDraw says so. After the flip finishes, what's on
+// screen must be the answer side, not the last frame of the animation.
+func TestScreenShowsAnswerAfterFlip(t *testing.T) {
+	u, _ := newTestUI(t, "new.apkg")
+	screen := NewCanvas(640, 480)
+	key := func(k int) {
+		u.Key(k)
+		u.Draw(screen)
+	}
+	tick := func(n int) {
+		for i := 0; i < n; i++ {
+			u.frame++
+			u.Tick()
+			if u.TickNeedsDraw() {
+				u.Draw(screen)
+			}
+		}
+	}
+	key(BtnA) // open the deck file
+	key(BtnA) // study
+	tick(3)
+	key(BtnA) // show answer
+	tick(flipFrames + 5)
+	if !u.answer {
+		t.Fatal("not on the answer side")
+	}
+	fresh := NewCanvas(640, 480)
+	u.Draw(fresh)
+	if string(fresh.Pix) != string(screen.Pix) {
+		t.Fatal("screen still shows a stale frame after the flip finished")
+	}
+	// a toast disappears from the screen once it expires
+	u.showToast("HELLO")
+	u.Draw(screen)
+	tick(1) // on the device a toast lives for many ticks
+	u.toastUntil = time.Now().Add(-time.Second)
+	tick(2)
+	u.Draw(fresh)
+	if string(fresh.Pix) != string(screen.Pix) {
+		t.Fatal("expired toast left on screen")
+	}
+}

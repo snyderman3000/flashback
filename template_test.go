@@ -113,3 +113,23 @@ func TestFieldEmptiness(t *testing.T) {
 		}
 	}
 }
+
+func TestOddFilterSpellings(t *testing.T) {
+	nt := &Notetype{Fields: []string{"Front"}, Templates: []Template{{Q: "{{Front}}", A: "{{FrontSide}}<hr id=answer>{{clickable::Tags}}|{{ :Front}}|{{tts en_US voices=x:Front}}|{{::}}"}}}
+	x := &tmplCtx{p: &Package{}, nt: nt, flds: []string{"hi"}, tags: "physics em"}
+	got := x.render(nt.Templates[0].A, true, "hi")
+	if !strings.Contains(got, "physics em|hi|hi|") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestNoBreakWithoutSpace(t *testing.T) {
+	loadCardFonts("")
+	// "[" and the cloze touch, so they must stay on one line
+	L := LayoutHTML(`aaaa bbbb cccc dddd eeee [<span class="cloze">[symbol]</span>].`, 330, 22, 100, 0, 0, nil)
+	for _, ln := range L.Lines {
+		if len(ln.items) > 0 && ln.items[0].text == "[symbol]" {
+			t.Fatalf("broke between [ and the cloze")
+		}
+	}
+}
