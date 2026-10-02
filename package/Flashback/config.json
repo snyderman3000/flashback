@@ -1,0 +1,6 @@
+{
+  "label": "Flashback",
+  "icon": "/mnt/SDCARD/App/Flashback/icon.png",
+  "launch": "launch.sh",
+  "description": "Study Anki flashcard decks"
+}

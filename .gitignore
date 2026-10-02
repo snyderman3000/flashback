@@ -1,0 +1,8 @@
+/dist/
+/package/Flashback/flashback
+/package/Flashback/data/
+go.work
+go.work.sum
+# large test decks are generated locally (see testdecks/)
+/testdata/ug_*.apkg
+/testdata/big.apkg
