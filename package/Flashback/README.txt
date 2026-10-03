@@ -24,19 +24,29 @@ INSTALL
      decks); after that it opens instantly.
 
 CONTROLS
-  CATALOG  Up/Down choose a deck file · A open · SELECT rescan · B exit
-  DECKS    Up/Down choose a deck · A study · X browse · Y shuffle · B back
+  CATALOG  Up/Down choose a deck file · A open · START settings
+           SELECT rescan · B exit
+  DECKS    Up/Down choose a deck · A study · X browse · Y shuffle
+           START settings · B back
+  SETTINGS Up/Down choose · Left/Right change (L1/R1 big steps)
+           B save and go back
   STUDY    A show answer, then Y again · A good · X easy
-           Up/Down scroll long cards · SELECT text size · B back (saves)
+           Up/Down scroll long cards · START play sound · SELECT text size
+           B back (saves)
   BROWSE   Up/Down move · L1/R1 page · A open card · B back
   CARD     A flip · Left/Right previous/next · Y reshuffle (shuffle mode)
+           START play sound
   MENU exits from anywhere. Progress is saved as you go, and when the
   device powers off.
 
 HOW STUDYING WORKS
-  Like Anki: new cards go through short steps (1 and 10 minutes), then
-  come back after days, weeks and months. "Again" sends a card back to
-  the start. Up to 20 new cards and 200 reviews per deck file per day.
+  Scheduled by FSRS, like Anki's FSRS option: new cards go through short
+  steps (1 and 10 minutes), then each card comes back when FSRS predicts
+  your chance of remembering it has dropped to the target recall (90% by
+  default). "Again" sends a card through a 10-minute relearning step.
+  Up to 20 new cards and 200 reviews per deck file per day by default;
+  change these, the target recall and the order of new cards with START
+  on the catalog or deck list. Progress from older versions carries over.
   Progress is kept per file name in data/progress, so you can replace a
   deck with an updated version of the same file and keep your progress.
   (Flashback keeps its own progress; it doesn't sync with Anki or
@@ -53,8 +63,9 @@ WHAT CARDS CAN SHOW
   Note types that build cards with JavaScript show their cloze text or
   fields instead. Whatever a note type's CSS hides (display: none)
   stays hidden, e.g. AnKing's tag list and second copy of the cloze;
-  buttons are left out. Not supported: sound and video (cards show a ♪),
-  [latex] images, and other card styling from CSS.
+  buttons are left out. Sounds play when a card is shown (START plays
+  them again) through the ffplay that OnionOS and NextUI include. Not
+  supported: video, [latex] images, and other card styling from CSS.
 
 SETTINGS (data/config.json in the Flashback folder — App/Flashback on
 OnionOS, Tools/tg5040/Flashback.pak on NextUI — created on first run)
@@ -62,6 +73,11 @@ OnionOS, Tools/tg5040/Flashback.pak on NextUI — created on first run)
   new_per_day      new cards per day         default 20
   reviews_per_day  reviews per day           default 200
   text_size        card text size (16–34)    default 22 (SELECT on a card)
+  autoplay_audio   play sounds automatically default true (START always plays)
+  desired_retention  target recall 0.70–0.99 default 0.9
+  maximum_interval   longest interval, days  default 36500
+  new_order          "deck" or "random"      default "deck"
+  fsrs_params        21 FSRS-6 parameters    default: FSRS's own
 
 FILES
   data/cache     unpacked decks (safe to delete; rebuilt automatically)

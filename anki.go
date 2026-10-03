@@ -92,6 +92,7 @@ type Package struct {
 	mu    sync.Mutex
 	notes *os.File
 	zr    *zip.ReadCloser
+	zf    map[string]*zip.File // zr's entries by name
 }
 
 // packageKey identifies a package file by path, size and modification time.
@@ -559,19 +560,24 @@ func (p *Package) ReadMedia(name string) ([]byte, error) {
 	if !ok {
 		return nil, os.ErrNotExist
 	}
+	// Only finding the entry needs the lock; the read itself can run alongside
+	// card lookups (the prefetcher reads pictures on another goroutine).
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.zr == nil {
 		zr, err := zip.OpenReader(p.Source)
 		if err != nil {
+			p.mu.Unlock()
 			return nil, err
 		}
 		p.zr = zr
-	}
-	for _, f := range p.zr.File {
-		if f.Name != ref.Zip {
-			continue
+		p.zf = make(map[string]*zip.File, len(zr.File))
+		for _, f := range zr.File {
+			p.zf[f.Name] = f
 		}
+	}
+	f := p.zf[ref.Zip]
+	p.mu.Unlock()
+	if f != nil {
 		rc, err := f.Open()
 		if err != nil {
 			return nil, err
@@ -622,7 +628,7 @@ func (p *Package) Close() {
 	}
 	if p.zr != nil {
 		p.zr.Close()
-		p.zr = nil
+		p.zr, p.zf = nil, nil
 	}
 }
 

@@ -93,6 +93,10 @@ func demoScene(u *UI, scene string) {
 	switch scene {
 	case "library":
 		u.libSel = 1
+	case "settings":
+		u.env.Config.NewPerDay, u.env.Config.ReviewsPerDay, u.env.Config.NewOrder = 80, 800, "random"
+		u.openSettings()
+		u.setSel = 2
 	case "unpack":
 		u.lib = append(u.lib, &LibEntry{Path: "/mnt/SDCARD/Anki/Ultimate Geography.apkg", Status: "READING NOTES 2000"})
 		u.libSel = 2
@@ -152,10 +156,6 @@ func demoScene(u *UI, scene string) {
 			u.startBrowse()
 			u.listSel = 9
 		}
-	case "bye":
-		u.scr = scrBye
-		u.byeStart = 0
-		u.frame = 12
 	}
 }
 

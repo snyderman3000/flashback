@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,8 +24,8 @@ const (
 	scrStudy
 	scrDone
 	scrBrowse
+	scrSettings
 	scrView
-	scrBye
 )
 
 type LibEntry struct {
@@ -95,11 +97,26 @@ type UI struct {
 	toast      string
 	toastUntil time.Time
 
+	// settings screen
+	setSel  int
+	setFrom screen
+
+	// the side likely to be shown next, prepared while this one is read
+	pre    prepared
+	preGen atomic.Int64
+
 	frame        int
 	wasAnimating bool
-	byeStart     int
 	quit         bool
 	post         chan func()
+}
+
+// prepared is a card side laid out ahead of time.
+type prepared struct {
+	ci     int
+	answer bool
+	size   int
+	layout *Layout
 }
 
 func NewUI(env *Env, w, h int) *UI {
@@ -242,7 +259,7 @@ func (u *UI) Tick() {
 }
 
 func (u *UI) Animating() bool {
-	return u.scanning || u.flipping() || u.toast != "" || u.scr == scrBye
+	return u.scanning || u.flipping() || u.toast != ""
 }
 
 // TickNeedsDraw reports whether the screen must be redrawn after a tick: while
@@ -335,9 +352,18 @@ func (u *UI) nextStudyCard() {
 }
 
 func (u *UI) showCard(ci int, answer bool) {
+	var heard []string // the question's sounds, already played before the flip
+	if u.layout != nil && u.card == ci && !u.answer && answer {
+		heard = u.layout.Sounds
+	}
+	same := u.layout != nil && u.card == ci && u.answer == answer
 	u.card, u.answer = ci, answer
 	u.cardScrl = 0
 	u.layout = u.layoutCard(ci, answer)
+	if !same {
+		u.autoplay(heard)
+	}
+	u.prepareNext()
 	u.shownAt = time.Now()
 	if answer && u.layout.AnswerY > 0 {
 		// jump to the answer when the question was long
@@ -348,10 +374,123 @@ func (u *UI) showCard(ci int, answer bool) {
 }
 
 func (u *UI) layoutCard(ci int, answer bool) *Layout {
-	w, _ := u.cardTextArea()
-	h := u.cardTextH()
-	html := u.cur.Pkg.CardHTML(ci, answer)
+	if p := u.pre; p.layout != nil && p.ci == ci && p.answer == answer && p.size == u.textSize() {
+		u.pre = prepared{}
+		return p.layout
+	}
+	return u.layoutHTML(u.cur.Pkg.CardHTML(ci, answer))
+}
+
+// autoplay plays the sounds of the side just shown, except those in heard.
+func (u *UI) autoplay(heard []string) {
+	p := u.env.Player
+	if p == nil {
+		return
+	}
+	if !u.env.Config.AutoplayAudio || u.layout == nil {
+		p.Stop()
+		return
+	}
+	var names []string
+	for _, s := range u.layout.Sounds {
+		if !slices.Contains(heard, s) {
+			names = append(names, s)
+		}
+	}
+	if len(names) == 0 {
+		p.Stop()
+		return
+	}
+	p.Play(u.cur.Pkg, names)
+}
+
+// replaySounds plays every sound on the side on screen.
+func (u *UI) replaySounds() {
+	if u.layout != nil && len(u.layout.Sounds) > 0 {
+		u.env.Player.Play(u.cur.Pkg, u.layout.Sounds)
+	}
+}
+
+func (u *UI) layoutHTML(html string) *Layout {
+	w, h := u.cardTextArea()
 	return LayoutHTML(html, w, u.textSize(), h*3/5, u.lineGap(), u.gridBase(), u.cur.Pkg)
+}
+
+// prepareNext starts getting the side most likely to come next ready: the
+// answer while a question is shown, the next card's question while an answer
+// is shown. Pictures (the slow part) are decoded on another goroutine, which
+// uses the device's second core; once they're done the side is laid out here,
+// on the UI goroutine, between key presses.
+func (u *UI) prepareNext() {
+	gen := u.preGen.Add(1)
+	u.pre = prepared{}
+	if u.cur == nil || u.card < 0 {
+		return
+	}
+	ci, answer := u.card, true
+	if u.answer {
+		answer = false
+		switch {
+		case u.scr == scrStudy && u.sess != nil:
+			ci = u.sess.Upcoming(u.card, u.now())
+		case u.scr == scrView && u.viewPos+1 < len(u.viewList):
+			ci = u.viewList[u.viewPos+1]
+		default:
+			ci = -1
+		}
+	}
+	if ci < 0 {
+		return
+	}
+	pkg, size := u.cur.Pkg, u.textSize()
+	w, h := u.cardTextArea()
+	// Building the card's HTML uses the font caches, so it stays on this
+	// goroutine; it runs right after the current side has been drawn.
+	u.whenIdle(func() {
+		if u.preGen.Load() != gen || u.cur == nil || u.cur.Pkg != pkg {
+			return
+		}
+		html := pkg.CardHTML(ci, answer)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("preparing card %d: %v", ci, r)
+				}
+			}()
+			stale := func() bool { return u.preGen.Load() != gen }
+			PrefetchImages(html, w, size, h*3/5, pkg, stale)
+			if stale() {
+				return
+			}
+			u.whenIdle(func() {
+				if u.preGen.Load() != gen || u.cur == nil || u.cur.Pkg != pkg || u.textSize() != size {
+					return
+				}
+				u.pre = prepared{ci: ci, answer: answer, size: size, layout: u.layoutHTML(html)}
+			})
+		}()
+	})
+}
+
+// whenIdle runs f on the UI goroutine once the current key press has been
+// drawn and no card is turning over. Safe to call from any goroutine.
+func (u *UI) whenIdle(f func()) {
+	var run func()
+	run = func() {
+		if u.flipping() {
+			time.AfterFunc(flipFrames*40*time.Millisecond, func() { u.postNow(run) })
+			return
+		}
+		f()
+	}
+	u.postNow(run)
+}
+
+func (u *UI) postNow(f func()) {
+	select {
+	case u.post <- f:
+	default: // queue full (or no main loop, as when taking screenshots): skip
+	}
 }
 
 func (u *UI) textSize() int { return int(math.Round(float64(u.env.Config.TextSize) * u.s)) }
@@ -385,6 +524,7 @@ func (u *UI) leaveStudy() {
 			u.showToast("COULDN'T SAVE PROGRESS")
 		}
 	}
+	u.env.Player.Stop()
 	u.sess = nil
 	u.buildDecks()
 	u.scr = scrDecks
@@ -499,6 +639,8 @@ func (u *UI) Key(k int) {
 		u.keyBrowse(k)
 	case scrView:
 		u.keyView(k)
+	case scrSettings:
+		u.keySettings(k)
 	}
 }
 
@@ -525,6 +667,8 @@ func (u *UI) keyLibrary(k int) {
 	case BtnSelect:
 		u.scan()
 		u.showToast("LOOKING FOR NEW DECKS")
+	case BtnStart:
+		u.openSettings()
 	case BtnB:
 		u.quit = true
 	}
@@ -547,6 +691,8 @@ func (u *UI) keyDecks(k int) {
 		u.startBrowse()
 	case BtnY:
 		u.startShuffle()
+	case BtnStart:
+		u.openSettings()
 	case BtnB:
 		u.cur.Prog.Save()
 		u.refreshCounts()
@@ -569,6 +715,9 @@ func (u *UI) keyStudy(k int) {
 		return
 	case BtnSelect:
 		u.cycleTextSize()
+		return
+	case BtnStart:
+		u.replaySounds()
 		return
 	case BtnB:
 		u.leaveStudy()
@@ -656,7 +805,10 @@ func (u *UI) keyView(k int) {
 		}
 	case BtnSelect:
 		u.cycleTextSize()
+	case BtnStart:
+		u.replaySounds()
 	case BtnB:
+		u.env.Player.Stop()
 		if u.viewFrom == scrBrowse {
 			u.listSel = u.viewPos
 			u.scr = scrBrowse

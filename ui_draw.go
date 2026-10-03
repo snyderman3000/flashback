@@ -40,9 +40,8 @@ func (u *UI) Draw(c *Canvas) {
 		u.drawDone(c)
 	case scrBrowse:
 		u.drawBrowse(c)
-	case scrBye:
-		u.drawBye(c)
-		return
+	case scrSettings:
+		u.drawSettings(c)
 	}
 	u.drawTop(c)
 	u.drawKeys(c)
@@ -85,6 +84,8 @@ func (u *UI) drawTop(c *Canvas) {
 	switch u.scr {
 	case scrLibrary:
 		crumb = "CARD CATALOG"
+	case scrSettings:
+		crumb = "SETTINGS"
 	case scrDecks:
 		crumb = u.cur.Name()
 	case scrStudy, scrDone:
@@ -140,12 +141,14 @@ func (u *UI) drawKeys(c *Canvas) {
 	switch u.scr {
 	case scrLibrary:
 		if len(u.lib) > 0 {
-			items = [][2]string{{"A", "OPEN"}, {"SELECT", "RESCAN"}, {"B", "EXIT"}}
+			items = [][2]string{{"A", "OPEN"}, {"START", "SETTINGS"}, {"SELECT", "RESCAN"}, {"B", "EXIT"}}
 		} else {
-			items = [][2]string{{"SELECT", "RESCAN"}, {"B", "EXIT"}}
+			items = [][2]string{{"START", "SETTINGS"}, {"SELECT", "RESCAN"}, {"B", "EXIT"}}
 		}
 	case scrDecks:
-		items = [][2]string{{"A", "STUDY"}, {"X", "BROWSE"}, {"Y", "SHUFFLE"}, {"B", "BACK"}}
+		items = [][2]string{{"A", "STUDY"}, {"X", "BROWSE"}, {"Y", "SHUFFLE"}, {"START", "SETTINGS"}, {"B", "BACK"}}
+	case scrSettings:
+		items = [][2]string{{"◀▶", "CHANGE"}, {"L1/R1", "BIG STEPS"}, {"B", "SAVE & BACK"}}
 	case scrStudy:
 		if u.answer && !u.flipping() {
 			id := u.cur.Pkg.Cards[u.card].ID
@@ -187,7 +190,7 @@ func (u *UI) drawKeys(c *Canvas) {
 			}
 		case "X":
 			col = colCyan
-		case "B", "SELECT", "L1/R1", "◀▶":
+		case "B", "SELECT", "L1/R1", "◀▶", "START":
 			col = colPaperDim
 		}
 		x = c.Button(u.fSmall, x, by, it[0], it[1], col)
@@ -503,7 +506,7 @@ func (u *UI) drawDecks(c *Canvas) {
 	}
 	// footnote: today's limits
 	ff := cardFont(u.px(12), 0)
-	note := fmt.Sprintf("Today: %d of %d new · %d of %d reviews · SELECT on a card changes text size",
+	note := fmt.Sprintf("Today: %d of %d new · %d of %d reviews · START for settings",
 		u.cur.Prog.NewToday, u.env.Config.NewPerDay, u.cur.Prog.RevToday, u.env.Config.ReviewsPerDay)
 	c.TextSet(ff, x+u.px(46), y+h-ff.height-u.px(8), ff.Ellipsize(note, w-u.px(60)), inkSoft)
 }
@@ -621,6 +624,9 @@ func (u *UI) drawCardScreen(c *Canvas) {
 	if len(u.layout.Sounds) > 0 && !u.flipping() {
 		sf := cardFont(u.px(11), 0)
 		s := "♪ audio not played on this device"
+		if u.env.Player != nil {
+			s = "♪ START plays the sound"
+		}
 		c.TextSet(sf, x+u.px(18), y+h-sf.height-u.px(4), s, paperDim)
 	}
 }
@@ -727,21 +733,4 @@ func (u *UI) drawBrowse(c *Canvas) {
 		u.scrollbar(c, x+w-u.px(8), top, per*rh, u.listTop, per, len(u.list))
 	}
 	_ = h
-}
-
-// ---------- goodbye ----------
-
-func (u *UI) drawBye(c *Canvas) {
-	t := float64(u.frame-u.byeStart) / 16
-	t = math.Min(1, math.Max(0, t))
-	x, y, w, h := u.cardRect()
-	k := math.Abs(math.Cos(t * math.Pi))
-	fw := max(u.px(2), int(float64(w)*k*(1-t*0.3)))
-	fx := x + (w-fw)/2
-	c.Fill(fx, y, fw, h, mix(paperCol, colDesk, t*0.6))
-	if t > 0.5 {
-		f := cardFont(u.px(24), 1)
-		s := "SEE YOU TOMORROW"
-		c.TextSet(f, (u.W-f.Width(s))/2, y+h/2-f.height/2, s, mix(colDesk, colAmber, (t-0.5)*2))
-	}
 }

@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"html"
 	"image"
 	"image/color"
@@ -18,6 +19,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -921,27 +923,69 @@ func urlUnescape(s string) (string, error) {
 	return b.String(), nil
 }
 
+// fittedImage is a picture decoded and scaled to one box. ready is closed once
+// img is set; img stays nil when the file can't be read.
+type fittedImage struct {
+	ready chan struct{}
+	img   *image.RGBA
+}
+
+// imageCache holds recently fitted pictures. The prefetcher fills it from a
+// second goroutine, so it's locked, and a picture that is still being decoded
+// is waited for rather than decoded twice.
 var imageCache = struct {
+	sync.Mutex
 	keys []string
-	m    map[string]*image.RGBA
-}{m: map[string]*image.RGBA{}}
+	m    map[string]*fittedImage
+}{m: map[string]*fittedImage{}}
+
+const imageCacheSize = 24
+
+// imageBox narrows the box a picture may fill by its width/height attributes.
+func imageBox(maxW, maxH, base int, attrs map[string]string) (int, int) {
+	if v, err := strconv.Atoi(strings.TrimSuffix(attrs["width"], "px")); err == nil && v > 0 {
+		maxW = min(maxW, max(16, v*base/20))
+	}
+	if v, err := strconv.Atoi(strings.TrimSuffix(attrs["height"], "px")); err == nil && v > 0 {
+		maxH = min(maxH, max(16, v*base/20))
+	}
+	return maxW, maxH
+}
 
 func (lc *layoutCtx) loadImage(name string, attrs map[string]string) *image.RGBA {
 	if lc.media == nil {
 		return nil
 	}
-	maxW, maxH := lc.width-lc.indent, lc.maxImgH
-	if v, err := strconv.Atoi(strings.TrimSuffix(attrs["width"], "px")); err == nil && v > 0 {
-		maxW = min(maxW, max(16, v*lc.base/20))
+	maxW, maxH := imageBox(lc.width-lc.indent, lc.maxImgH, lc.base, attrs)
+	return fitImage(lc.media, name, maxW, maxH)
+}
+
+// fitImage returns the named picture fitted inside maxW×maxH, from the cache
+// when it's there (or being made).
+func fitImage(media MediaSource, name string, maxW, maxH int) *image.RGBA {
+	key := fmt.Sprintf("%p|%s|%dx%d", media, name, maxW, maxH)
+	imageCache.Lock()
+	if e, ok := imageCache.m[key]; ok {
+		imageCache.Unlock()
+		<-e.ready
+		return e.img
 	}
-	if v, err := strconv.Atoi(strings.TrimSuffix(attrs["height"], "px")); err == nil && v > 0 {
-		maxH = min(maxH, max(16, v*lc.base/20))
+	e := &fittedImage{ready: make(chan struct{})}
+	imageCache.m[key] = e
+	imageCache.keys = append(imageCache.keys, key)
+	if len(imageCache.keys) > imageCacheSize {
+		// whoever is waiting on an evicted entry still gets it
+		delete(imageCache.m, imageCache.keys[0])
+		imageCache.keys = imageCache.keys[1:]
 	}
-	key := name + "|" + strconv.Itoa(maxW) + "x" + strconv.Itoa(maxH)
-	if im, ok := imageCache.m[key]; ok {
-		return im
-	}
-	b, err := lc.media.ReadMedia(name)
+	imageCache.Unlock()
+	defer close(e.ready)
+	e.img = decodeFitted(media, name, maxW, maxH)
+	return e.img
+}
+
+func decodeFitted(media MediaSource, name string, maxW, maxH int) *image.RGBA {
+	b, err := media.ReadMedia(name)
 	if err != nil {
 		return nil
 	}
@@ -950,8 +994,6 @@ func (lc *layoutCtx) loadImage(name string, attrs map[string]string) *image.RGBA
 		if err != nil {
 			return nil
 		}
-		imageCache.m[key] = im
-		imageCache.keys = append(imageCache.keys, key)
 		return im
 	}
 	src, _, err := image.Decode(bytes.NewReader(b))
@@ -977,13 +1019,35 @@ func (lc *layoutCtx) loadImage(name string, attrs map[string]string) *image.RGBA
 	} else {
 		xdraw.NearestNeighbor.Scale(dst, dst.Bounds(), src, sb, xdraw.Over, nil)
 	}
-	imageCache.m[key] = dst
-	imageCache.keys = append(imageCache.keys, key)
-	if len(imageCache.keys) > 24 {
-		delete(imageCache.m, imageCache.keys[0])
-		imageCache.keys = imageCache.keys[1:]
-	}
 	return dst
+}
+
+var imgTagRe = regexp.MustCompile(`(?is)<(img\b[^>]*)>`)
+
+// PrefetchImages decodes the pictures in a card's HTML into the image cache,
+// fitted the way LayoutHTML with the same width, base and maxImgH will ask for
+// them (pictures inside indented lists are left to the layout). It's meant to
+// run on another goroutine while the reader looks at the previous side; it
+// stops early once stale reports true.
+func PrefetchImages(src string, width, base, maxImgH int, media MediaSource, stale func() bool) {
+	if media == nil {
+		return
+	}
+	for _, m := range imgTagRe.FindAllStringSubmatch(src, -1) {
+		if stale() {
+			return
+		}
+		_, attrs := parseTag(m[1])
+		name := attrs["src"]
+		if name == "" {
+			continue
+		}
+		if u, err := urlUnescape(name); err == nil {
+			name = u
+		}
+		maxW, maxH := imageBox(width, maxImgH, base, attrs)
+		fitImage(media, name, maxW, maxH)
+	}
 }
 
 // ---- drawing ----

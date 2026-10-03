@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,7 +26,10 @@ func TestSchedulerFlow(t *testing.T) {
 	if l := prog.IntervalLabel(id, answerGood, now); l != "10m" {
 		t.Errorf("good label %q", l)
 	}
-	if l := prog.IntervalLabel(id, answerEasy, now); l != "4d" {
+	// Easy skips the steps: FSRS's first Easy stability is 8.3 days, fuzzed to 6–10
+	if l := prog.IntervalLabel(id, answerEasy, now); !strings.HasSuffix(l, "d") {
+		t.Errorf("easy label %q", l)
+	} else if d, _ := strconv.Atoi(strings.TrimSuffix(l, "d")); d < 6 || d > 10 {
 		t.Errorf("easy label %q", l)
 	}
 	s.Answer(ci, answerGood, now) // -> 10 min step
@@ -45,28 +50,33 @@ func TestSchedulerFlow(t *testing.T) {
 	if s.Next(later) != -1 || s.Done != 7 {
 		t.Fatalf("session not finished: next=%d done=%d", s.Next(later), s.Done)
 	}
+	// Good, Good on the first day: stability 2.3 days, so back in 2 days
 	st := prog.State(id)
-	if st.Ivl != 1 || st.Due != prog.Day+1 || st.Learn != 0 {
+	if st.Ivl != 2 || st.Due != prog.Day+2 || st.Learn != 0 || st.S < 2.2 || st.S > 2.4 {
 		t.Fatalf("graduated state %+v", st)
 	}
-	// next day it is due; Good gives 1*2.5 -> 3 days (round(2.5)=3)
 	tomorrow := now.Add(24 * time.Hour)
 	prog.rollover(tomorrow)
-	c := prog.Count(p, idx, tomorrow)
-	if c.Due != 1 || c.New != 2 {
+	if c := prog.Count(p, idx, tomorrow); c.Due != 0 || c.New != 2 {
 		t.Fatalf("tomorrow counts %+v", c)
 	}
-	if l := prog.IntervalLabel(id, answerGood, tomorrow); l != "3d" {
-		t.Errorf("review good label %q", l)
+	later = now.Add(48 * time.Hour)
+	prog.rollover(later)
+	if c := prog.Count(p, idx, later); c.Due != 1 {
+		t.Fatalf("day-after counts %+v", c)
 	}
-	prog.Answer(id, answerAgain, tomorrow)
-	if st := prog.State(id); st.Learn != 2 || st.Lapses != 1 || st.Ease != 2300 {
+	// remembered on time: the interval grows
+	if next := prog.Next(id, answerGood, later); next.Ivl <= 2 || next.S <= st.S {
+		t.Errorf("review good: %+v", next)
+	}
+	prog.Answer(id, answerAgain, later)
+	if st := prog.State(id); st.Learn != 2 || st.Lapses != 1 || st.S >= 2.3 {
 		t.Fatalf("lapse state %+v", st)
 	}
 	if err := prog.Save(); err != nil {
 		t.Fatal(err)
 	}
-	again := LoadProgress(filepathDir(prog.path), "x.apkg", tomorrow)
+	again := LoadProgress(filepathDir(prog.path), "x.apkg", later)
 	if st := again.State(id); st == nil || st.Lapses != 1 || again.Studied != prog.Studied {
 		t.Fatalf("reloaded progress %+v", st)
 	}
