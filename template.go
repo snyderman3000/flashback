@@ -37,14 +37,14 @@ func (p *Package) cardHTML(ci int, answer bool) string {
 	}
 	ctx := &tmplCtx{p: p, nt: nt, card: c, flds: flds, ord: c.Ord, tags: n.Tags}
 	t := nt.templateFor(c.Ord)
-	q := ctx.render(t.Q, false, "")
+	q := ctx.styled(ctx.render(t.Q, false, ""))
 	var out string
 	if !nt.isImageOcclusion() && !visibleHTML(q) {
 		// The template builds the card with JavaScript (e.g. "Cloze Overlapping")
 		// and leaves only hidden fields behind. Show the note's content directly.
 		out = ctx.fallback(t, answer)
 	} else if answer {
-		out = ctx.render(t.A, true, q)
+		out = ctx.styled(ctx.render(t.A, true, q))
 	} else {
 		out = q
 	}
@@ -76,7 +76,7 @@ func (x *tmplCtx) fallback(t Template, answer bool) string {
 	if !answer {
 		return q
 	}
-	extra := x.render(t.A, true, "")
+	extra := x.styled(x.render(t.A, true, ""))
 	if !visibleHTML(extra) {
 		// nothing visible on the back either: list the other filled-in fields
 		var parts []string
@@ -88,6 +88,11 @@ func (x *tmplCtx) fallback(t Template, answer bool) string {
 		extra = strings.Join(parts, "<br>")
 	}
 	return a + "<hr id=answer>" + extra
+}
+
+// styled drops what the note type's CSS (and the card's own <style> blocks) hide.
+func (x *tmplCtx) styled(h string) string {
+	return hideByCSS(h, cardStyleSheet(x.nt.CSS, h), x.ord)
 }
 
 // visibleHTML reports whether HTML would show anything on the card.

@@ -7,14 +7,16 @@ import (
 	"image/png"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
-const version = "0.1.1"
+const version = "0.4.0"
 
 // Config lives in App/Flashback/data/config.json.
 type Config struct {
@@ -22,12 +24,20 @@ type Config struct {
 	NewPerDay     int      `json:"new_per_day"`     // new cards introduced per deck file per day
 	ReviewsPerDay int      `json:"reviews_per_day"` // review cap per deck file per day
 	TextSize      int      `json:"text_size"`       // card text size in pixels (16–34)
+	AutoplayAudio bool     `json:"autoplay_audio"`  // play a card's sounds when it's shown
+
+	// FSRS scheduling
+	DesiredRetention float64   `json:"desired_retention"`     // recall rate to aim for, 0.70–0.99
+	MaxInterval      int       `json:"maximum_interval"`      // longest interval, days
+	NewOrder         string    `json:"new_order"`             // "deck" or "random"
+	FSRSParams       []float64 `json:"fsrs_params,omitempty"` // 21 FSRS-6 weights; empty for the defaults
 
 	Problem string `json:"-"`
 }
 
 func defaultConfig() Config {
-	return Config{DeckFolders: []string{"/mnt/SDCARD/Anki"}, NewPerDay: 20, ReviewsPerDay: 200, TextSize: 22}
+	return Config{DeckFolders: []string{"/mnt/SDCARD/Anki"}, NewPerDay: 20, ReviewsPerDay: 200, TextSize: 22, AutoplayAudio: true,
+		DesiredRetention: 0.9, MaxInterval: 36500, NewOrder: "deck"}
 }
 
 type Env struct {
@@ -35,6 +45,7 @@ type Env struct {
 	DataDir string
 	Config  Config
 	Now     func() time.Time
+	Player  *Player // nil: sounds aren't played
 }
 
 func newEnv() *Env {
@@ -46,6 +57,7 @@ func newEnv() *Env {
 	}
 	os.MkdirAll(env.DataDir, 0o755)
 	env.Config = loadConfig(filepath.Join(env.DataDir, "config.json"))
+	applyConfig(env.Config)
 	return env
 }
 
@@ -73,6 +85,19 @@ func loadConfig(path string) Config {
 	}
 	if cfg.TextSize < 16 || cfg.TextSize > 34 {
 		cfg.TextSize = d.TextSize
+	}
+	if cfg.DesiredRetention < 0.7 || cfg.DesiredRetention > 0.99 {
+		cfg.DesiredRetention = d.DesiredRetention
+	}
+	if cfg.MaxInterval <= 0 {
+		cfg.MaxInterval = d.MaxInterval
+	}
+	if cfg.NewOrder != "random" {
+		cfg.NewOrder = d.NewOrder
+	}
+	if len(cfg.FSRSParams) != 0 && len(cfg.FSRSParams) != len(fsrsDefaultParams) {
+		cfg.Problem = fmt.Sprintf("fsrs_params needs %d numbers; using the FSRS defaults.", len(fsrsDefaultParams))
+		cfg.FSRSParams = nil
 	}
 	return cfg
 }
@@ -189,18 +214,28 @@ func main() {
 	if logf, _ := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); logf != nil {
 		log.SetOutput(logf)
 	}
-	log.Printf("flashback %s starting, folders=%v", version, env.Config.DeckFolders)
+	pl, err := detectPlatform()
+	if err != nil {
+		log.Fatalf("platform: %v", err)
+	}
+	log.Printf("flashback %s starting on %s (input %s), folders=%v", version, pl.Name, pl.Input, env.Config.DeckFolders)
+	env.Player = NewPlayer(pl.Name)
+	defer env.Player.Stop()
 
-	fb, err := OpenFramebuffer()
+	fb, err := OpenFramebuffer(pl.Flip)
 	if err != nil {
 		log.Fatalf("framebuffer: %v", err)
 	}
 	defer fb.Close()
+	log.Printf("screen %dx%d, %d bpp", fb.W, fb.H, fb.bpp)
 	c := NewCanvas(fb.W, fb.H)
 	keys := make(chan int, 32)
-	if err := ReadInput("/dev/input/event0", keys); err != nil {
+	if err := ReadInput(pl, keys); err != nil {
 		log.Fatalf("input: %v", err)
 	}
+	// powering off (or the OS closing the app) sends a signal: save first
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	ui := NewUI(env, c.W, c.H)
 	ui.Start()
 	tick := time.NewTicker(40 * time.Millisecond)
@@ -215,6 +250,11 @@ func main() {
 		case f := <-ui.post:
 			f()
 			dirty = true
+		case s := <-stop:
+			log.Printf("%v: saving and exiting", s)
+			ui.saveAll()
+			env.Player.Stop()
+			return
 		case <-tick.C:
 			ui.frame++
 			ui.Tick()
@@ -233,13 +273,5 @@ func main() {
 		}
 	}
 	ui.saveAll()
-	ui.scr = scrBye
-	ui.byeStart = ui.frame
-	for i := 0; i < 16; i++ {
-		ui.frame++
-		ui.Draw(c)
-		fb.Present(c)
-		time.Sleep(40 * time.Millisecond)
-	}
 	fb.Clear()
 }

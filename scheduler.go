@@ -1,11 +1,14 @@
 package main
 
-// Spaced repetition, Anki-style but simplified (SM-2 with learning steps).
+// Spaced repetition with FSRS (fsrs.go), Anki-style.
 //
 // New cards go through two short learning steps (1 min, 10 min) and then
-// graduate to a 1-day interval (Easy skips straight to 4 days). Review cards
-// grow by their ease factor; Again sends them back through a 10-minute
-// relearning step and lowers the ease. Days roll over at 4 a.m. local time.
+// graduate to an interval FSRS picks from the card's stability (Easy skips the
+// steps). Review cards come back when their predicted recall falls to the
+// desired retention; Again sends them through a 10-minute relearning step.
+// Days roll over at 4 a.m. local time. Cards studied with an earlier
+// Flashback (SM-2: interval and ease) are converted the first time they're
+// answered again.
 //
 // Progress is stored per package file in data/progress/<hash>.json, keyed by
 // Anki's card ids, so replacing a deck with an updated export keeps progress.
@@ -24,14 +27,17 @@ import (
 )
 
 type CardState struct {
-	Ivl     int   `json:"i,omitempty"` // days
-	Ease    int   `json:"e,omitempty"` // permille, 2500 = 250%
-	Due     int   `json:"d,omitempty"` // day number, for review cards
-	Reps    int   `json:"r,omitempty"`
-	Lapses  int   `json:"l,omitempty"`
-	Learn   int   `json:"ln,omitempty"` // 0 review, 1 learning, 2 relearning
-	Step    int   `json:"s,omitempty"`
-	LearnAt int64 `json:"t,omitempty"` // unix seconds when a learning card is due
+	Ivl     int     `json:"i,omitempty"`  // days
+	Ease    int     `json:"e,omitempty"`  // SM-2 ease in permille (older progress only)
+	S       float64 `json:"s2,omitempty"` // FSRS stability, days
+	D       float64 `json:"df,omitempty"` // FSRS difficulty, 1–10
+	LastDay int     `json:"lr,omitempty"` // day number of the last answer
+	Due     int     `json:"d,omitempty"`  // day number, for review cards
+	Reps    int     `json:"r,omitempty"`
+	Lapses  int     `json:"l,omitempty"`
+	Learn   int     `json:"ln,omitempty"` // 0 review, 1 learning, 2 relearning
+	Step    int     `json:"s,omitempty"`
+	LearnAt int64   `json:"t,omitempty"` // unix seconds when a learning card is due
 }
 
 type Progress struct {
@@ -156,14 +162,27 @@ func (p *Progress) Next(id int64, ans int, now time.Time) CardState {
 	if cur := p.State(id); cur != nil {
 		st = *cur
 	} else {
-		st = CardState{Ease: 2500, Learn: 1}
+		st = CardState{Learn: 1}
 	}
-	if st.Ease == 0 {
-		st.Ease = 2500
-	}
+	today := dayNumber(now)
 	t := now.Unix()
+	st = migrateSM2(st)
+
+	// update the card's memory: stability and difficulty
+	elapsed := today - st.LastDay
 	switch {
-	case st.Learn == 1: // new or learning
+	case st.S == 0: // first answer
+		st.S, st.D = sched.initStability(ans), clampD(sched.initDifficulty(ans))
+	case elapsed < 1: // again on the same day: learning steps
+		st.S, st.D = sched.shortTermStability(st.S, ans), sched.nextDifficulty(st.D, ans)
+	default:
+		r := sched.retrievability(float64(elapsed), st.S)
+		st.S, st.D = sched.nextStability(st.D, st.S, r, ans), sched.nextDifficulty(st.D, ans)
+	}
+
+	// then when it comes back
+	switch st.Learn {
+	case 1: // new or learning
 		switch ans {
 		case answerAgain:
 			st.Step = 0
@@ -171,49 +190,72 @@ func (p *Progress) Next(id int64, ans int, now time.Time) CardState {
 		case answerGood:
 			st.Step++
 			if st.Step >= len(learnSteps) {
-				st = graduate(st, p.Day, 1)
+				st = graduate(st, today, id)
 			} else {
 				st.LearnAt = t + learnSteps[st.Step]
 			}
-		case answerEasy:
-			st = graduate(st, p.Day, 4)
-		}
-	case st.Learn == 2: // relearning after a lapse
-		switch ans {
-		case answerAgain:
-			st.LearnAt = t + relearnStep
 		default:
-			st = graduate(st, p.Day, st.Ivl)
+			st = graduate(st, today, id)
+		}
+	case 2: // relearning after a lapse
+		if ans == answerAgain {
+			st.LearnAt = t + relearnStep
+		} else {
+			st = graduate(st, today, id)
 		}
 	default: // review
-		switch ans {
-		case answerAgain:
+		if ans == answerAgain {
 			st.Lapses++
-			st.Ease = max(1300, st.Ease-200)
-			st.Ivl = max(1, st.Ivl/2)
 			st.Learn, st.Step, st.LearnAt = 2, 0, t+relearnStep
-		case answerGood:
-			late := max(0, p.Day-st.Due)
-			n := int(math.Round(float64(st.Ivl+late/2) * float64(st.Ease) / 1000))
-			st.Ivl = min(36500, max(st.Ivl+1, n))
-			st.Due = p.Day + st.Ivl
-		case answerEasy:
-			late := max(0, p.Day-st.Due)
-			n := int(math.Round(float64(st.Ivl+late) * float64(st.Ease) / 1000 * 1.3))
-			st.Ivl = min(36500, max(st.Ivl+2, n))
-			st.Ease += 150
-			st.Due = p.Day + st.Ivl
+		} else {
+			st.Ivl = sched.fuzz(sched.interval(st.S), id, st.Reps)
+			st.Due = today + st.Ivl
 		}
 	}
+	st.LastDay = today
 	st.Reps++
 	return st
 }
 
-func graduate(st CardState, today, ivl int) CardState {
+// graduate moves a (re)learning card to review, due when FSRS says.
+func graduate(st CardState, today int, id int64) CardState {
 	st.Learn, st.Step, st.LearnAt = 0, 0, 0
-	st.Ivl = max(1, ivl)
+	st.Ivl = sched.fuzz(sched.interval(st.S), id, st.Reps)
 	st.Due = today + st.Ivl
 	return st
+}
+
+// migrateSM2 gives a card studied with SM-2 an FSRS memory estimated from its
+// interval and ease. Cards still in their first learning steps simply start
+// over with their next answer.
+func migrateSM2(st CardState) CardState {
+	if st.S > 0 || st.Ivl <= 0 || st.Learn == 1 {
+		return st
+	}
+	ease := float64(st.Ease) / 1000
+	if ease <= 1 {
+		ease = 2.5
+	}
+	st.S, st.D = sched.fromSM2(ease, float64(st.Ivl))
+	if st.Learn == 2 {
+		st.LastDay = dayNumber(time.Unix(st.LearnAt-relearnStep, 0))
+	} else {
+		st.LastDay = st.Due - st.Ivl
+	}
+	return st
+}
+
+// recall is a card's predicted chance of being remembered today.
+func (p *Progress) recall(id int64, today int) float64 {
+	st := p.State(id)
+	if st == nil {
+		return 0
+	}
+	m := migrateSM2(*st)
+	if m.S == 0 {
+		return 0
+	}
+	return sched.retrievability(float64(today-m.LastDay), m.S)
 }
 
 // Answer records an answer and reports whether the card comes back this session.
@@ -285,13 +327,20 @@ func NewSession(pk *Package, prog *Progress, idx []int, newLimit, revLimit int, 
 			news = append(news, i)
 		}
 	}
-	// reviews: most overdue first; one card per note
-	sort.SliceStable(revs, func(a, b int) bool {
-		return prog.State(pk.Cards[revs[a]].ID).Due < prog.State(pk.Cards[revs[b]].ID).Due
-	})
+	// reviews: the ones most likely forgotten first (FSRS's "retrievability
+	// ascending"), so a review limit cuts the safest cards; one card per note
+	today := dayNumber(now)
+	rec := make(map[int]float64, len(revs))
+	for _, i := range revs {
+		rec[i] = prog.recall(pk.Cards[i].ID, today)
+	}
+	sort.SliceStable(revs, func(a, b int) bool { return rec[revs[a]] < rec[revs[b]] })
 	revs = onePerNote(pk, revs, noteUsed)
 	if n := max(0, revLimit-prog.RevToday); len(revs) > n {
 		revs = revs[:n]
+	}
+	if sched.randomNew {
+		sort.SliceStable(news, func(a, b int) bool { return newRank(pk.Cards[news[a]].ID) < newRank(pk.Cards[news[b]].ID) })
 	}
 	news = onePerNote(pk, news, noteUsed)
 	if n := max(0, newLimit-prog.NewToday); len(news) > n {
@@ -348,6 +397,28 @@ func (s *Session) Next(now time.Time) int {
 	}
 	if len(s.queue) > 0 {
 		return s.queue[0]
+	}
+	return -1
+}
+
+// Upcoming guesses the card Next will return once ci (the card Next just
+// returned) has been answered Good, so it can be prepared ahead of time. It
+// changes nothing; a wrong guess only costs some background work.
+func (s *Session) Upcoming(ci int, now time.Time) int {
+	learn, queue := s.learn, s.queue
+	if len(learn) > 0 && learn[0] == ci {
+		learn = learn[1:]
+	} else if len(queue) > 0 && queue[0] == ci {
+		queue = queue[1:]
+	}
+	if len(learn) > 0 {
+		st := s.prog.State(s.pk.Cards[learn[0]].ID)
+		if st == nil || st.LearnAt <= now.Unix() || len(queue) == 0 {
+			return learn[0]
+		}
+	}
+	if len(queue) > 0 {
+		return queue[0]
 	}
 	return -1
 }
