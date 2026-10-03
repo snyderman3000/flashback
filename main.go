@@ -7,14 +7,16 @@ import (
 	"image/png"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
-const version = "0.1.1"
+const version = "0.2.0"
 
 // Config lives in App/Flashback/data/config.json.
 type Config struct {
@@ -189,18 +191,26 @@ func main() {
 	if logf, _ := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); logf != nil {
 		log.SetOutput(logf)
 	}
-	log.Printf("flashback %s starting, folders=%v", version, env.Config.DeckFolders)
+	pl, err := detectPlatform()
+	if err != nil {
+		log.Fatalf("platform: %v", err)
+	}
+	log.Printf("flashback %s starting on %s (input %s), folders=%v", version, pl.Name, pl.Input, env.Config.DeckFolders)
 
-	fb, err := OpenFramebuffer()
+	fb, err := OpenFramebuffer(pl.Flip)
 	if err != nil {
 		log.Fatalf("framebuffer: %v", err)
 	}
 	defer fb.Close()
+	log.Printf("screen %dx%d, %d bpp", fb.W, fb.H, fb.bpp)
 	c := NewCanvas(fb.W, fb.H)
 	keys := make(chan int, 32)
-	if err := ReadInput("/dev/input/event0", keys); err != nil {
+	if err := ReadInput(pl, keys); err != nil {
 		log.Fatalf("input: %v", err)
 	}
+	// powering off (or the OS closing the app) sends a signal: save first
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	ui := NewUI(env, c.W, c.H)
 	ui.Start()
 	tick := time.NewTicker(40 * time.Millisecond)
@@ -215,6 +225,10 @@ func main() {
 		case f := <-ui.post:
 			f()
 			dirty = true
+		case s := <-stop:
+			log.Printf("%v: saving and exiting", s)
+			ui.saveAll()
+			return
 		case <-tick.C:
 			ui.frame++
 			ui.Tick()

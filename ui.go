@@ -670,7 +670,10 @@ func (u *UI) keyView(k int) {
 // ---------- device status ----------
 
 func battery() int {
-	b, err := os.ReadFile("/tmp/percBat")
+	b, err := os.ReadFile("/tmp/percBat") // OnionOS
+	if err != nil {
+		b, err = os.ReadFile("/sys/class/power_supply/axp2202-battery/capacity") // TrimUI
+	}
 	if err != nil {
 		return -1
 	}

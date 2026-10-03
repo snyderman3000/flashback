@@ -56,6 +56,7 @@ var (
 var systemFontPaths = []string{
 	"/mnt/SDCARD/miyoo/app/wqy-microhei.ttc", // OnionOS: Chinese, Japanese, Korean
 	"/mnt/SDCARD/miyoo/app/MicrosoftYaHeiGB.ttf",
+	"/mnt/SDCARD/.system/res/font1.ttf", // NextUI / NX Redux: Rounded M+ (Japanese)
 }
 
 func loadCardFonts(appDir string) {

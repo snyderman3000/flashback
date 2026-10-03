@@ -152,6 +152,9 @@ func TestUIEmptyAndBroken(t *testing.T) {
 }
 
 func TestUISmallScreenAndTextSizes(t *testing.T) {
+	if _, err := os.Stat("testdata/ug_new.apkg"); err != nil {
+		t.Skip("real deck not present")
+	}
 	u, _ := newTestUI(t, "ug_new.apkg")
 	if len(u.lib) == 0 || u.lib[0].Pkg == nil {
 		t.Skip("real deck not present")

@@ -1,6 +1,6 @@
 # FLASHBACK
 
-**Anki flashcards for OnionOS on the Miyoo Mini Plus.** Flashback opens Anki deck files (`.apkg`), the shared decks from AnkiWeb or ones you export from Anki, and lets you study them with spaced repetition, browse every card, or shuffle through a pile. Cards are typed onto ruled index cards. Works offline; no account needed.
+**Anki flashcards for OnionOS on the Miyoo Mini Plus, and NextUI / NX Redux on TrimUI handhelds (Brick, Brick Pro, Smart Pro).** Flashback opens Anki deck files (`.apkg`), the shared decks from AnkiWeb or ones you export from Anki, and lets you study them with spaced repetition, browse every card, or shuffle through a pile. Cards are typed onto ruled index cards. Works offline; no account needed.
 
 > 🤖 **Built by Claude.** Flashback was designed and written by [Claude](https://claude.ai), Anthropic's AI model, at the request of [@snyderman3000](https://github.com/snyderman3000) after someone asked for an Anki reader in [Mixtape](https://github.com/snyderman3000/mixtape). Claude wrote the code, the documentation and the artwork. It shares its display and input code with [Mixtape](https://github.com/snyderman3000/mixtape) and [Rewind](https://github.com/snyderman3000/rewind). Please report bugs through [Issues](https://github.com/snyderman3000/flashback/issues).
 
@@ -36,6 +36,8 @@
 AnkiWeb only lets signed-in users download shared decks, so decks are fetched on a computer rather than on the Mini. With no decks yet, Flashback shows these steps and a QR code for the shared-deck page.
 
 Requires OnionOS 4.2 or newer (Miyoo Mini Plus or Mini Flip). No Wi-Fi needed.
+
+**NextUI / NX Redux (TrimUI Brick, Brick Pro, Smart Pro):** use `Flashback-vX.Y.Z-NextUI.zip` instead, copy its `Tools` folder to the root of the SD card, and open **Tools → Flashback**. The controls are the same; the d-pad and shoulder buttons repeat when held.
 
 ## Controls
 
@@ -74,7 +76,8 @@ MENU exits from anywhere. Progress is saved as you go.
 Needs Go 1.24 or newer.
 
 ```sh
-./build.sh          # runs the tests, cross-compiles for ARMv7 and writes dist/Flashback-vX.Y.Z-OnionOS.zip
+./build.sh          # runs the tests, cross-compiles for ARMv7 (OnionOS) and arm64 (NextUI) and writes
+                    # dist/Flashback-vX.Y.Z-OnionOS.zip and dist/Flashback-vX.Y.Z-NextUI.zip
 go run . -shot study -out study.png   # render a screen on your computer (library, decks, study, answer, cloze,
                                       # occlusion, browse, view, japanese, flag, map, done, empty, bye)
 ```
