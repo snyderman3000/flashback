@@ -33,7 +33,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-const cacheFormat = 2
+const cacheFormat = 3 // 3: note type CSS
 
 type Template struct {
 	Name string `json:"name"`
@@ -47,6 +47,7 @@ type Notetype struct {
 	Cloze     bool       `json:"cloze"`
 	Fields    []string   `json:"fields"`
 	Templates []Template `json:"templates"`
+	CSS       string     `json:"css,omitempty"`
 }
 
 type DeckInfo struct {
@@ -346,13 +347,14 @@ func readCol11(db *sqliteDB, p *Package) error {
 			Q    string `json:"qfmt"`
 			A    string `json:"afmt"`
 		} `json:"tmpls"`
+		CSS string `json:"css"`
 	}
 	if err := json.Unmarshal([]byte(models), &ms); err != nil {
 		return fmt.Errorf("note types: %w", err)
 	}
 	for k, m := range ms {
 		id, _ := strconv.ParseInt(k, 10, 64)
-		nt := &Notetype{ID: id, Name: m.Name, Cloze: m.Type == 1}
+		nt := &Notetype{ID: id, Name: m.Name, Cloze: m.Type == 1, CSS: m.CSS}
 		sort.SliceStable(m.Flds, func(i, j int) bool { return m.Flds[i].Ord < m.Flds[j].Ord })
 		for _, f := range m.Flds {
 			nt.Fields = append(nt.Fields, f.Name)
@@ -379,16 +381,19 @@ func readCol11(db *sqliteDB, p *Package) error {
 // ---- schema 18: separate tables with protobuf config blobs ----
 
 func readNotetypes18(db *sqliteDB, p *Package) error {
-	// notetypes: id, name, mtime, usn, config(Notetype.Config: kind = 1)
+	// notetypes: id, name, mtime, usn, config(Notetype.Config: kind = 1, css = 3)
 	err := db.Scan("notetypes", func(r Row) error {
 		id := r.Rowid
 		if v := r.Int(0); v != 0 {
 			id = v
 		}
 		nt := &Notetype{ID: id, Name: r.Str(1)}
-		pbEach(r.Blob(4), func(field int, v uint64, _ []byte) {
-			if field == 1 && v == 1 {
+		pbEach(r.Blob(4), func(field int, v uint64, b []byte) {
+			switch {
+			case field == 1 && v == 1:
 				nt.Cloze = true
+			case field == 3:
+				nt.CSS = string(b)
 			}
 		})
 		p.Notetypes[id] = nt

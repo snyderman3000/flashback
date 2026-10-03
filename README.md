@@ -66,7 +66,8 @@ MENU exits from anywhere. Progress is saved as you go.
 - `data/cache` holds unpacked decks. It's safe to delete; it's rebuilt automatically.
 - Maths written for MathJax (`\( … \)`) is shown as readable text with symbols, superscripts and subscripts (`F = (q₁ q₂)/(4πε₀ r²)`), not typeset equations.
 - Some note types build the card with JavaScript (for example "Cloze Overlapping"). Flashback can't run that, so it shows the note's cloze text (or its fields) instead.
-- Not supported yet: sound and video (cards show ♪ instead), [latex] images, and the deck's own CSS beyond colours, sizes and bold/italic.
+- Parts of a card that the note type's CSS hides (`display: none`) stay hidden, as on AnkiMobile/AnkiDroid — e.g. the tag list and the second copy of the cloze on AnKing cards. Buttons are left out, since there's nothing to click them with.
+- Not supported yet: sound and video (cards show ♪ instead), [latex] images, and the deck's own CSS beyond hiding, colours, sizes and bold/italic.
 
 ## Building
 

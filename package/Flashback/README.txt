@@ -45,8 +45,10 @@ WHAT CARDS CAN SHOW
   another script, drop a .ttf/.otf font into App/Flashback/fonts.
   Maths (MathJax) is shown as readable text: F = (q₁ q₂)/(4πε₀ r²).
   Note types that build cards with JavaScript show their cloze text or
-  fields instead. Not supported: sound and video (cards show a ♪),
-  [latex] images, and card styling from CSS.
+  fields instead. Whatever a note type's CSS hides (display: none)
+  stays hidden, e.g. AnKing's tag list and second copy of the cloze;
+  buttons are left out. Not supported: sound and video (cards show a ♪),
+  [latex] images, and other card styling from CSS.
 
 SETTINGS (App/Flashback/data/config.json, created on first run)
   deck_folders     folders to look in        default ["/mnt/SDCARD/Anki"]
